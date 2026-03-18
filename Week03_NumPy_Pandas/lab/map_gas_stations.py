@@ -1,109 +1,128 @@
-import json
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+"""
+Create an interactive Folium map of Istanbul gas stations from the CSV data.
+"""
 
-def extract_stations(geojson_path):
-    with open(geojson_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    
+import csv
+import folium
+from folium.plugins import MarkerCluster
+from pathlib import Path
+
+LAB_DIR = Path(__file__).parent
+CSV_PATH = LAB_DIR / "istanbul_gas_stations.csv"
+OUTPUT_PATH = LAB_DIR / "istanbul_gas_stations_map.html"
+
+# Brand -> marker color mapping
+BRAND_COLORS = {
+    "Opet": "#ff9f1c",
+    "Shell": "#ff3a3a",
+    "Petrol Ofisi": "#4cc9f0",
+    "BP": "#80ed99",
+    "TotalEnergies": "#c77dff",
+    "Aytemiz": "#72efdd",
+    "Türkiye Petrolleri": "#ff6b6b",
+    "Alpet": "#48bfe3",
+    "Kadoil": "#b5e48c",
+    "Lukoil": "#f9c74f",
+}
+DEFAULT_COLOR = "#adb5bd"
+
+
+def load_stations(path):
     stations = []
-    for feature in data['features']:
-        props = feature.get('properties', {})
-        geom = feature.get('geometry', {})
-        
-        # Extract brand
-        brand = props.get('brand', props.get('name', props.get('operator', 'Unknown')))
-        if brand is None: brand = 'Unknown'
-        
-        # Normalize brand names for consistency
-        brand_lower = brand.lower()
-        if 'shell' in brand_lower: brand = 'Shell'
-        elif 'opet' in brand_lower: brand = 'Opet'
-        elif 'petrol ofisi' in brand_lower or 'po' == brand_lower: brand = 'Petrol Ofisi'
-        elif 'bp' in brand_lower: brand = 'BP'
-        elif 'aytemiz' in brand_lower: brand = 'Aytemiz'
-        elif 'total' in brand_lower: brand = 'TotalEnergies'
-        elif 'türkiye petrolleri' in brand_lower or 'tp' == brand_lower: brand = 'TP'
-        elif 'socar' in brand_lower: brand = 'SOCAR'
-        elif 'alpet' in brand_lower: brand = 'Alpet'
-        elif 'lukoil' in brand_lower: brand = 'Lukoil'
-        
-        # Extract coordinates
-        if geom['type'] == 'Point':
-            lon, lat = geom['coordinates']
-        elif geom['type'] in ['Polygon', 'MultiPolygon']:
-            # Take centroid of the first ring
-            coords = geom['coordinates'][0] if geom['type'] == 'Polygon' else geom['coordinates'][0][0]
-            lon = np.mean([c[0] for c in coords])
-            lat = np.mean([c[1] for c in coords])
-        else:
-            continue
-            
-        stations.append({
-            'brand': brand,
-            'lat': lat,
-            'lon': lon
-        })
-    
-    return pd.DataFrame(stations)
+    with open(path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            stations.append({
+                "lat": float(row["latitude"]),
+                "lon": float(row["longitude"]),
+                "name": row["name"] or "Unknown",
+                "brand": row["brand"] or "Unknown",
+                "operator": row["operator"],
+                "addr_street": row["addr_street"],
+                "addr_district": row["addr_district"],
+            })
+    return stations
 
-def plot_stations(df, output_path):
-    plt.figure(figsize=(15, 10))
-    
-    # Define colors for major brands
-    brand_colors = {
-        'Shell': '#ff0000',      # Red
-        'Opet': '#00529b',       # Blue
-        'Petrol Ofisi': '#d71920',# Red
-        'BP': '#009d3d',         # Green
-        'Aytemiz': '#f7941e',    # Orange
-        'TotalEnergies': '#00a19a',# Teal
-        'TP': '#e30613',         # Red
-        'SOCAR': '#0067b1',      # Blue
-        'Unknown': '#808080'     # Gray
-    }
-    
-    # Get top brands for the legend
-    top_brands = df['brand'].value_counts().head(8).index.tolist()
-    
-    for brand in df['brand'].unique():
-        brand_df = df[df['brand'] == brand]
-        color = brand_colors.get(brand, '#000000') # Default black for others
-        label = brand if brand in top_brands else None
-        
-        plt.scatter(brand_df['lon'], brand_df['lat'], 
-                    c=color, label=label, s=20, alpha=0.7, edgecolors='none')
-    
-    plt.title('Gas Stations in Istanbul (from OpenStreetMap)', fontsize=16)
-    plt.xlabel('Longitude', fontsize=12)
-    plt.ylabel('Latitude', fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    
-    # Add a custom legend
-    handles, labels = plt.gca().get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    plt.legend(by_label.values(), by_label.keys(), title='Major Brands', loc='upper right')
-    
-    # Set reasonable limits for Istanbul
-    plt.xlim(28.0, 29.8)
-    plt.ylim(40.8, 41.5)
-    
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
-    print(f"Map saved to {output_path}")
+
+def build_map(stations):
+    # Center on Istanbul
+    m = folium.Map(location=[41.015, 29.01], zoom_start=11, tiles="CartoDB dark_matter")
+
+    cluster = MarkerCluster(name="Gas Stations").add_to(m)
+
+    for s in stations:
+        color = BRAND_COLORS.get(s["brand"], DEFAULT_COLOR)
+
+        popup_lines = [f"<b>{s['name']}</b>"]
+        if s["brand"] != "Unknown":
+            popup_lines.append(f"Brand: {s['brand']}")
+        if s["operator"]:
+            popup_lines.append(f"Operator: {s['operator']}")
+        if s["addr_street"]:
+            popup_lines.append(f"Street: {s['addr_street']}")
+        if s["addr_district"]:
+            popup_lines.append(f"District: {s['addr_district']}")
+        popup_lines.append(f"Coords: {s['lat']:.4f}, {s['lon']:.4f}")
+        popup_html = (
+            '<div style="background:#1a1a2e;color:#e0e0e0;padding:6px 8px;'
+            'border-radius:4px;font-size:12px;">'
+            + "<br>".join(popup_lines)
+            + "</div>"
+        )
+
+        folium.CircleMarker(
+            location=[s["lat"], s["lon"]],
+            radius=6,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.8,
+            popup=folium.Popup(popup_html, max_width=250),
+            tooltip=f"{s['name']} ({s['brand']})",
+        ).add_to(cluster)
+
+    # Legend
+    brand_counts = {}
+    for s in stations:
+        b = s["brand"]
+        brand_counts[b] = brand_counts.get(b, 0) + 1
+
+    legend_items = []
+    for brand, count in sorted(brand_counts.items(), key=lambda x: -x[1]):
+        color = BRAND_COLORS.get(brand, DEFAULT_COLOR)
+        legend_items.append(
+            f'<li><span style="background:{color};width:12px;height:12px;'
+            f'display:inline-block;border-radius:50%;margin-right:6px;"></span>'
+            f'{brand} ({count})</li>'
+        )
+
+    legend_html = f"""
+    <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+                background:#1a1a2e;color:#e0e0e0;padding:12px 16px;border-radius:8px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.5);font-size:13px;
+                max-height:400px;overflow-y:auto;border:1px solid #333;">
+        <b style="color:#fff;">Istanbul Gas Stations ({len(stations)})</b>
+        <ul style="list-style:none;padding:4px 0;margin:0;">
+            {''.join(legend_items)}
+        </ul>
+        <div style="font-size:11px;color:#888;margin-top:6px;">
+            Source: OpenStreetMap / Overpass API
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    folium.LayerControl().add_to(m)
+
+    return m
+
+
+def main():
+    stations = load_stations(CSV_PATH)
+    print(f"Loaded {len(stations)} stations")
+    m = build_map(stations)
+    m.save(str(OUTPUT_PATH))
+    print(f"Map saved: {OUTPUT_PATH}")
+
 
 if __name__ == "__main__":
-    geojson_path = r'C:\Users\arda\Documents\CE49X\Week03_NumPy_Pandas\lab\export.geojson'
-    output_path = r'C:\Users\arda\Documents\CE49X\Week03_NumPy_Pandas\lab\istanbul_gas_stations_map.png'
-    
-    print("Extracting station data...")
-    df = extract_stations(geojson_path)
-    print(f"Found {len(df)} stations.")
-    
-    print("Generating map...")
-    plot_stations(df, output_path)
-    
-    # Print some stats
-    print("\nBrand Distribution:")
-    print(df['brand'].value_counts().head(10))
+    main()
